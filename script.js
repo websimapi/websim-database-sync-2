@@ -7,15 +7,46 @@ const ITEM_COLLECTION_TYPE = 'syncItem_v3'; // Incremented version for schema cl
 function App() {
     const [newItemContent, setNewItemContent] = useState('');
     const [currentUser, setCurrentUser] = useState(null);
+    const [userError, setUserError] = useState(null); // New state for user fetching errors
 
     useEffect(() => {
         async function fetchCurrentUser() {
-            const user = await window.websim.getCurrentUser();
-            setCurrentUser(user);
+            // Polling logic to wait for window.websim.getCurrentUser
+            const maxAttempts = 25; // Approx 5 seconds (25 attempts * 200ms interval)
+            const intervalTime = 200; // ms
+
+            for (let attempt = 0; attempt < maxAttempts; attempt++) {
+                if (window.websim && typeof window.websim.getCurrentUser === 'function') {
+                    try {
+                        const user = await window.websim.getCurrentUser();
+                        setCurrentUser(user);
+                        setUserError(null); // Clear any previous error message
+                        return; // Successfully fetched user
+                    } catch (error) {
+                        console.error("Error calling window.websim.getCurrentUser:", error);
+                        setUserError("Failed to retrieve user data. An error occurred during the request.");
+                        return; // Error occurred while calling the function, exit
+                    }
+                }
+                // Function not found yet, or window.websim not ready. Wait before next attempt.
+                await new Promise(resolve => setTimeout(resolve, intervalTime));
+            }
+
+            // If loop finishes, the function was not found or did not become available
+            console.error('window.websim.getCurrentUser did not become available after multiple attempts.');
+            setUserError('User authentication service is currently unavailable. Please check your connection or try again later by refreshing the page.');
+            // Optional: Log diagnostic info for developers
+            if (window.websim) {
+                console.log('Debug: window.websim object when failing:', window.websim);
+                console.log('Debug: typeof window.websim.getCurrentUser when failing:', typeof window.websim.getCurrentUser);
+            } else {
+                console.log('Debug: window.websim is undefined when failing.');
+            }
         }
-        fetchCurrentUser();
+
+        fetchCurrentUser(); // Call the robust fetching function. Errors are handled internally by setting userError state.
     }, []);
-    
+
     const items = useSyncExternalStore(
         (callback) => room.collection(ITEM_COLLECTION_TYPE).subscribe(callback),
         () => room.collection(ITEM_COLLECTION_TYPE).getList()
@@ -35,7 +66,7 @@ function App() {
                     if (Array.isArray(incomingItems)) {
                         const currentLocalItems = room.collection(ITEM_COLLECTION_TYPE).getList();
                         const existingSyncIds = new Set(currentLocalItems.map(item => item.sync_id));
-                        
+
                         let itemsAddedCount = 0;
                         for (const incomingItem of incomingItems) {
                             if (incomingItem && typeof incomingItem.sync_id === 'string' && typeof incomingItem.content === 'string') {
@@ -51,11 +82,10 @@ function App() {
                             }
                         }
                         if (itemsAddedCount > 0) {
-                             alert(`${itemsAddedCount} new item(s) synced from URL.`);
+                            alert(`${itemsAddedCount} new item(s) synced from URL.`);
                         } else if (incomingItems.length > 0) {
                             alert("Data from URL processed. No new items to add (they likely exist already).");
                         }
-
 
                         // Clear the 'data' query parameter from URL to avoid re-processing on refresh/reload.
                         const newUrl = window.location.pathname + window.location.hash; // Keep hash if present
@@ -116,9 +146,9 @@ function App() {
         try {
             const jsonData = JSON.stringify(itemsToSync);
             const base64Data = btoa(encodeURIComponent(jsonData)); // URI encode before btoa for safety
-            
+
             const syncUrl = `https://websim.com/@api/database-sync-2?data=${base64Data}`;
-            
+
             // Navigate
             window.location.href = syncUrl;
         } catch (error) {
@@ -126,13 +156,14 @@ function App() {
             alert("Failed to prepare data for sync. See console for details.");
         }
     };
-    
+
     // Sort items by creation date (newest first) for display
     const displayedItems = [...items].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
     return (
         <div>
             <h1>Data Sync Demo</h1>
+            {userError && <p style={{color: 'red', fontWeight: 'bold', border: '1px solid red', padding: '10px', borderRadius: '4px', backgroundColor: '#ffebee'}}>{userError}</p>}
             
             <h2>Add New Item</h2>
             <input
@@ -161,11 +192,11 @@ function App() {
                     ))}
                 </ul>
             )}
-            {currentUser && <p>Current User: {currentUser.username}</p>}
+            {currentUser && <p>Current User: {currentUser.username} (ID: {currentUser.id})</p>}
+            {!currentUser && !userError && <p>Loading user information...</p>} {/* Show loading only if no error and no user yet */}
         </div>
     );
 }
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(<App />);
-
